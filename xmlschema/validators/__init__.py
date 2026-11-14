@@ -38,6 +38,8 @@ from .elements import XsdElement, Xsd11Element, XsdAlternative
 from .builders import XsdBuilders, GlobalMaps
 from .xsd_globals import XsdGlobals
 from .schemas import XMLSchemaMeta, XMLSchemaBase, XMLSchema, XMLSchema10, XMLSchema11
+from .streaming import MemoryLimitError, MemoryMonitor, StreamValidationError, \
+    StreamingValidator, is_stream_valid, iter_stream_errors, stream_validate
 
 
 __all__ = [
@@ -62,4 +64,6 @@ __all__ = [
     'XsdGroup', 'Xsd11Group', 'XsdElement', 'Xsd11Element', 'XsdAlternative',
     'XsdBuilders', 'GlobalMaps', 'XsdGlobals',
     'XMLSchemaMeta', 'XMLSchemaBase', 'XMLSchema', 'XMLSchema10', 'XMLSchema11',
+    'MemoryLimitError', 'MemoryMonitor', 'StreamValidationError', 'StreamingValidator',
+    'is_stream_valid', 'iter_stream_errors', 'stream_validate',
 ]
