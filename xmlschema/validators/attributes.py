@@ -769,7 +769,9 @@ class XsdAttributeGroup(
                     context.validation_error(validation, self, reason, obj)
                     continue
 
+            context.attribute = name
             item = xsd_attribute.raw_encode(value, validation, context)
+            context.attribute = None
             if result is not None and item is not None and not isinstance(item, EmptyType):
                 result.append((name, item))
 

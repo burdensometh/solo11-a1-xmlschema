@@ -110,7 +110,7 @@ class EncodeArguments(ValidationArguments):
     indent = NonNegIntOption(default=4)
     etree_element_class = ElementTypeOption(default=None)
 
-    unordered = untyped_data = BooleanOption(default=False)
+    unordered = untyped_data = strict_types = BooleanOption(default=False)
 
 
 class ValidationContext:
@@ -378,13 +378,16 @@ class EncodeContext(ValidationContext):
 
     _arguments = EncodeArguments
 
-    __slots__ = ('unordered', 'untyped_data', 'indent', 'etree_element_class')
+    __slots__ = ('unordered', 'untyped_data', 'strict_types', 'indent',
+                 'etree_element_class', 'implicit_conversions')
 
     def __init__(self,
                  source: Any,
                  converter: Optional[XMLSchemaConverter] = None,
                  unordered: bool = False,
                  untyped_data: bool = False,
+                 strict_types: bool = False,
+                 implicit_conversions: Optional[Counter[str]] = None,
                  **kwargs: Any) -> None:
 
         if not isinstance(converter, XMLSchemaConverter):
@@ -392,10 +395,70 @@ class EncodeContext(ValidationContext):
 
         self.unordered = unordered
         self.untyped_data = untyped_data
+        self.strict_types = strict_types
+        # Counts implicit type conversions per field, keyed by field name/path.
+        # A caller-provided counter can be injected for collecting totals across
+        # multiple encoding runs.
+        self.implicit_conversions: Counter[str] = \
+            implicit_conversions if implicit_conversions is not None else Counter()
         self.indent = converter.indent
         self.etree_element_class = converter.etree_element_class
 
         super().__init__(source, converter, **kwargs)
+
+    def get_field_name(self) -> Optional[str]:
+        """
+        Returns the name of the field being encoded, prefixed with ``@`` for
+        attributes, or `None` if the current encoding context doesn't refer to
+        a named field (e.g. a type-level encoding).
+        """
+        if self.attribute is not None:
+            return '@' + get_prefixed_qname(self.attribute, self.namespaces)
+        elif self.elem is not None:
+            return get_prefixed_qname(self.elem.tag, self.namespaces)
+        return None
+
+    def count_implicit_conversion(self, kind: str) -> None:
+        """
+        Records an implicit conversion of the given *kind* for the field currently
+        being encoded. The counter key includes the field name (or its XSD type
+        when no field is in scope) so that per-field conversion totals can be
+        reported when the encoding is completed.
+        """
+        field = self.get_field_name()
+        if field is None:
+            field = '<untyped>'
+        self.implicit_conversions[f'{field} ({kind})'] += 1
+
+    def type_conversion_error(self,
+                              validation: str,
+                              validator: 'XsdValidator',
+                              obj: Any,
+                              encoder: Any,
+                              reason: str) -> Optional[XMLSchemaValidationError]:
+        """
+        Raises or collects an encoding error related with a strict type check
+        (empty string or a type mismatch). The field name is included in the
+        error reason when a field is in encoding scope.
+        """
+        field = self.get_field_name()
+        if field is not None:
+            reason = _('field {0}: {1}').format(field, reason)
+        return self.encode_error(validation, validator, obj, encoder, reason)
+
+    def format_implicit_conversions(self) -> str:
+        """
+        Returns a readable report of the implicit conversions counted during
+        the encoding, one field per line with its conversion total.
+        """
+        if not self.implicit_conversions:
+            return _('no implicit type conversions')
+        lines = [
+            _('implicit type conversions per field:')
+        ]
+        for key, count in sorted(self.implicit_conversions.items()):
+            lines.append(f'  {key}: {count}')
+        return '\n'.join(lines)
 
     def encode_error(self,
                      validation: str,

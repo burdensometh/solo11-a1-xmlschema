@@ -1817,3 +1817,23 @@ msgstr ""
 #: xmlschema/converters/__init__.py:37
 msgid "'converter' argument must be a {0!r} subclass or instance: {1!r}"
 msgstr ""
+
+#: xmlschema/validators/validation.py
+msgid "field {0}: {1}"
+msgstr ""
+
+#: xmlschema/validators/validation.py
+msgid "no implicit type conversions"
+msgstr ""
+
+#: xmlschema/validators/validation.py
+msgid "implicit type conversions per field:"
+msgstr ""
+
+#: xmlschema/validators/simple_types.py
+msgid "empty string is not a valid value for type {!r}"
+msgstr ""
+
+#: xmlschema/validators/simple_types.py
+msgid "integer value {0!r} is not a boolean, use a boolean or one of 'true'/'1'/'false'/'0'"
+msgstr ""

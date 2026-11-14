@@ -40,6 +40,13 @@ FacetsValueType = Union[XsdFacet, Callable[[Any], None], list[XsdAssertionFacet]
 PythonTypeClasses = Union[type[Any], tuple[type[Any]]]
 
 
+def flatten_instance_types(instance_types: PythonTypeClasses) -> tuple[type[Any], ...]:
+    """Normalizes the *instance_types* class attribute to a tuple of types."""
+    if isinstance(instance_types, tuple):
+        return instance_types
+    return (instance_types,)
+
+
 class XsdSimpleType(XsdType, ValidationMixin[str | bytes, DecodedValueType]):
     """
     Base class for simpleTypes definitions. Generally used only for
@@ -702,6 +709,12 @@ class XsdAtomicBuiltin(XsdAtomic):
     def admitted_facets(self) -> frozenset[str]:
         return self._admitted_facets or self.primitive_type.admitted_facets
 
+    @property
+    def type_local_name(self) -> str:
+        """The local name of the builtin type (builtin types are always named)."""
+        assert self.name is not None
+        return local_name(self.name)
+
     def raw_decode(self, obj: str | bytes, validation: str,
                    context: ValidationContext) -> DecodedValueType:
         if isinstance(obj, (str, bytes)):
@@ -797,9 +810,35 @@ class XsdAtomicBuiltin(XsdAtomic):
 
         if isinstance(obj, bool) and self.name != nm.XSD_BOOLEAN:
             msg = _("boolean value {0!r} requires a {1!r} decoder").format(obj, bool)
-            context.encode_error(validation, self, obj, self.from_python, msg)
+            context.type_conversion_error(validation, self, obj, self.from_python, msg)
+            if not context.strict_types:
+                context.count_implicit_conversion('boolean to ' + self.type_local_name)
 
         if isinstance(obj, str):
+            string_based = str in flatten_instance_types(self.instance_types)
+            if not string_based:
+                if obj == '':
+                    # An empty string is not in the value space of non
+                    # string-based XSD types (numbers, booleans, dates, ...).
+                    if context.strict_types:
+                        reason = _("empty string is not a valid value for type {!r}") \
+                            .format(self.prefixed_name)
+                        context.type_conversion_error(
+                            validation, self, obj, self.to_python, reason
+                        )
+                        return None
+                    context.count_implicit_conversion(
+                        'empty string to ' + self.type_local_name
+                    )
+                else:
+                    # A non-empty string is a valid lexical representation, but
+                    # with a Python object at hand it's an implicit string
+                    # coercion that is only applied in lenient mode.
+                    if not context.strict_types:
+                        context.count_implicit_conversion(
+                            'string to ' + self.type_local_name
+                        )
+
             try:
                 value = self.to_python(obj)
             except (ValueError, TypeError) as err:
@@ -807,11 +846,45 @@ class XsdAtomicBuiltin(XsdAtomic):
                 return None
 
             text = obj
+        elif self.name == nm.XSD_BOOLEAN and isinstance(obj, int) \
+                and not isinstance(obj, bool):
+            # An integer (e.g. 1/0) is an implicit coercion toward the boolean
+            # value space: xs:boolean expects a Python bool or a lexical string.
+            if context.strict_types:
+                reason = _("integer value {0!r} is not a boolean, use a "
+                           "boolean or one of 'true'/'1'/'false'/'0'").format(obj)
+                context.type_conversion_error(
+                    validation, self, obj, self.from_python, reason
+                )
+                return None
+
+            # Existing behavior: a type mismatch is always signaled, then in
+            # lax/skip mode the value is coerced.
+            msg = _("{0!r} is not an instance of {1!r}").format(obj, self.instance_types)
+            context.type_conversion_error(validation, self, obj, self.to_python, msg)
+            context.count_implicit_conversion('integer to boolean')
+
+            try:
+                text = self.from_python(bool(obj))
+            except ValueError as err:
+                context.encode_error(validation, self, obj, self.from_python, err)
+                return None
+            value = obj
         else:
             if not isinstance(obj, self.instance_types):
                 if not context.untyped_data or not isinstance(obj, UntypedAtomic):
                     msg = _("{0!r} is not an instance of {1!r}").format(obj, self.instance_types)
-                    context.encode_error(validation, self, obj, self.to_python, msg)
+                    context.type_conversion_error(
+                        validation, self, obj, self.to_python, msg
+                    )
+
+                if context.strict_types:
+                    # Type mismatch: do not perform any implicit coercion
+                    return None
+
+                context.count_implicit_conversion(
+                    f'{type(obj).__name__} to ' + self.type_local_name
+                )
 
                 try:
                     obj = self.python_type(obj)

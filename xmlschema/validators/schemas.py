@@ -18,6 +18,7 @@ from abc import ABCMeta
 import logging
 import re
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterator
 from functools import cached_property
 from operator import attrgetter
@@ -1668,6 +1669,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
                     max_depth: Optional[int] = None,
                     untyped_data: bool = False,
                     etree_element_class: Optional[type[ElementType]] = None,
+                    strict_types: bool = False,
+                    implicit_conversions: Optional[Counter[str]] = None,
                     **kwargs: Any) -> Iterator[Union[Element, XMLSchemaValidationError]]:
         """
         Creates an iterator for encoding a data structure to an ElementTree's Element.
@@ -1692,6 +1695,14 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         untyped values to all builtin datatypes.
         :param etree_element_class: the class to use for creating new XML elements, \
         if not provided uses the ElementTree's Element class.
+        :param strict_types: when `True` empty strings and values that don't match \
+        the XSD declared type are rejected with an encoding error reporting the \
+        field name, instead of being implicitly coerced. When `False` (the default) \
+        the implicit coercions are applied and counted per field in the encoding \
+        context's *implicit_conversions* counter.
+        :param implicit_conversions: an optional :class:`collections.Counter` used \
+        for collecting the per-field implicit type conversions performed during the \
+        encoding (meaningful only when *strict_types* is `False`).
         :param kwargs: keyword arguments with other options for building the \
         converter instance.
         :return: yields an Element instance/s or validation/encoding errors.
@@ -1712,6 +1723,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             max_depth=max_depth,
             untyped_data=untyped_data,
             etree_element_class=etree_element_class,
+            strict_types=strict_types,
+            implicit_conversions=implicit_conversions,
         )
         kwargs['converter'] = self.maps.settings.get_converter(**kwargs)
         context = EncodeContext(**kwargs)

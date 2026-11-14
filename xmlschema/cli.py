@@ -14,6 +14,7 @@ import os
 import argparse
 import logging
 import pathlib
+from collections import Counter
 from urllib.error import URLError
 
 import xmlschema
@@ -176,6 +177,10 @@ def json2xml():
                              "{!r}.".format(tuple(CONVERTERS_MAP)))
     parser.add_argument('--indent', type=int, default=4,
                         help="indentation for XML output (default is 4 spaces)")
+    parser.add_argument('--strict-types', action='store_true', default=False,
+                        help="reject empty strings and values that don't match "
+                             "the XSD declared type, reporting the field name, "
+                             "instead of implicitly coercing them.")
     parser.add_argument('-o', '--output', type=str, default='.',
                         help="where to write the encoded XML files, current dir by default.")
     parser.add_argument('-f', '--force', action="store_true", default=False,
@@ -197,6 +202,7 @@ def json2xml():
         raise XMLSchemaValueError(f"{str(base_path)!r} is not a directory")
 
     tot_errors = 0
+    conversion_counter = Counter()
     for json_path in map(pathlib.Path, args.files):
         xml_path = base_path.joinpath(json_path.name).with_suffix('.xml')
         if xml_path.exists() and not args.force:
@@ -211,6 +217,8 @@ def json2xml():
                     converter=converter,
                     validation='lax',
                     indent=args.indent,
+                    strict_types=args.strict_types,
+                    implicit_conversions=conversion_counter,
                 )
             except (xmlschema.XMLSchemaException, URLError) as err:
                 tot_errors += 1
@@ -227,6 +235,11 @@ def json2xml():
 
         with open(str(xml_path), 'w') as fp:
             fp.write(etree_tostring(root))
+
+    if conversion_counter:
+        print("implicit type conversions per field:")
+        for key, count in sorted(conversion_counter.items()):
+            print(f"  {key}: {count}")
 
     sys.exit(tot_errors)
 

@@ -2,6 +2,16 @@
 CHANGELOG
 *********
 
+Unreleased
+==========
+* Add switchable *strict_types* mode to the encoding API: when enabled, empty
+  strings for non string-based XSD types and Python type mismatches (e.g. an
+  ``int`` for an ``xs:boolean``) are rejected with an encoding error that
+  reports the field name; when disabled (the default) the existing implicit
+  coercions are applied and counted per field in an *implicit_conversions*
+  Counter. Add a ``--strict-types`` option and a per-field conversion report to
+  the json2xml CLI.
+
 `v4.3.2`_ (2026-06-30)
 ======================
 * Fix for issues #473, #474 and #475

@@ -340,6 +340,42 @@ namely *iter_decode()* and *iter_encode()*, that yield both data and validation 
 See :ref:`schema-level-api` section for more information.
 
 
+Strict type checking on encoding
+---------------------------------
+
+When data produced by an upstream system is encoded to XML, values sometimes do not
+match the XSD declared types: an empty string is provided for a numeric or boolean
+field, a Python ``int`` (e.g. ``1``) is used where a boolean is expected, or numbers
+and dates are passed as strings. For compatibility reasons the encoding is lenient by
+default: the values are implicitly coerced and, when the coercion is not transparent,
+an encoding error is collected or raised according to the validation mode.
+
+The implicit coercions can be controlled with the *strict_types* argument of the
+encoding methods (``encode``, ``iter_encode`` and the module-level ``from_json``):
+
+.. code-block:: python
+
+    from collections import Counter
+
+    # Lenient mode (default): the data is converted and each implicit
+    # conversion is counted per field in the provided Counter.
+    conversion_counter = Counter()
+    root, errors = schema.encode(data, validation='lax',
+                                 implicit_conversions=conversion_counter)
+    print(conversion_counter)
+    # Counter({'flag (integer to boolean)': 1, 'count (empty string to int)': 1, ...})
+
+    # Strict mode: empty strings and Python type mismatches are rejected with
+    # an encoding error whose reason includes the offending field name.
+    root, errors = schema.encode(data, validation='lax', strict_types=True)
+
+In strict mode a non-empty string that is a valid lexical representation of the target
+type (e.g. ``'true'``, ``'3.14'`` or ``'2026-11-14'``) remains accepted, as well as the
+empty string for string-based XSD types (``xs:string``, ``xs:token``, ...). The JSON to
+XML command line tool exposes the same behavior with the ``--strict-types`` option and,
+at the end of the run, prints the per-field implicit conversion totals.
+
+
 Decoding a part using XPath
 ---------------------------
 
