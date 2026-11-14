@@ -361,8 +361,15 @@ class TestXsdIdentities(XsdValidatorTestCase):
         self.assertIsNone(counter.increase(('3',)))
         self.assertIsNone(counter.increase(('4',)))
 
-        with self.assertRaises(KeyError):
-            list(counter.iter_errors(identities={}))
+        # A referred constraint without a counter has no values, so all the
+        # collected references are reported as unresolved values.
+        errors = list(counter.iter_errors(identities={}))
+        self.assertEqual(len(errors), 4)
+        self.assertIn("value ('1',) not found", str(errors[0]))
+        self.assertIn("(2 times)", str(errors[0]))
+        self.assertIn("value ('2',) not found", str(errors[1]))
+        self.assertIn("value ('3',) not found", str(errors[2]))
+        self.assertIn("value ('4',) not found", str(errors[3]))
 
         key_counter = IdentityCounter(schema.identities['key1'], elem)
         self.assertIsNone(key_counter.increase(('1',)))

@@ -69,7 +69,8 @@ class TestXmlDocuments(XMLSchemaTestCase):
 
         json_data, errors = to_json(col_1_error_xml_file, validation='lax', lazy=True,
                                     json_options={'default': lambda x: None})
-        self.assertEqual(len(errors), 0)
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], XMLSchemaDecodeError)
         self.assertIn('"object": [null, null]', json_data)
 
     def test_to_etree_api(self):
@@ -446,7 +447,7 @@ class TestXmlDocuments(XMLSchemaTestCase):
 
         xml_document = XmlDocument(col_1_error_xml_file, validation='lax', lazy=True)
         json_data, errors = xml_document.to_json(json_options={'default': lambda x: None})
-        self.assertEqual(len(errors), 0)
+        self.assertEqual(len(errors), 1)
         self.assertIn('"object": [null, null]', json_data)
 
     def test_xml_document_write(self):

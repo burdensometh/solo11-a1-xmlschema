@@ -126,6 +126,28 @@ class TestConsoleScripts(unittest.TestCase):
 
     @patch('sys.stderr', new_callable=io.StringIO)
     @patch('sys.stdout', new_callable=io.StringIO)
+    def test_validate_command_09(self, mock_out, mock_err):
+        # The lazy validation reports the same errors of a full validation.
+        self.run_validate('vehicles-2_errors.xml')
+        full_errors = mock_err.getvalue()
+        mock_err.truncate(0)
+        mock_err.seek(0)
+
+        self.run_validate('--lazy', 'vehicles-2_errors.xml')
+        self.assertEqual(mock_err.getvalue(), full_errors)
+        self.assertEqual('2', str(self.ctx.exception))
+
+    @patch('sys.stderr', new_callable=io.StringIO)
+    @patch('sys.stdout', new_callable=io.StringIO)
+    def test_validate_command_10(self, mock_out, mock_err):
+        # The --max-errors option limits the reported errors, adding a final
+        # notice that summarizes the suppressed ones.
+        self.run_validate('--max-errors=1', 'vehicles-2_errors.xml')
+        self.assertEqual("vehicles-2_errors.xml is not valid\n", mock_err.getvalue())
+        self.assertEqual('2', str(self.ctx.exception))
+
+    @patch('sys.stderr', new_callable=io.StringIO)
+    @patch('sys.stdout', new_callable=io.StringIO)
     def test_xml2json_command_01(self, mock_out, mock_err):
         self.run_xml2json()
         self.assertEqual(mock_out.getvalue(), '')

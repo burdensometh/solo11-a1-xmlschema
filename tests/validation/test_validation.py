@@ -248,6 +248,87 @@ class TestValidation(XsdValidatorTestCase):
         self.assertIsInstance(errors[0], XMLSchemaValidationError)
         self.assertIsInstance(errors[1], XMLSchemaValidationError)
 
+    def test_consistent_errors_among_entry_points(self):
+        # Issue: the validation and the decode APIs reported different errors
+        # for the same XML data, e.g. unresolved IDREFs were not checked by
+        # the decode APIs.
+        schema = self.schema_class("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+              <xs:element name="root">
+                <xs:complexType>
+                  <xs:sequence>
+                    <xs:element name="item" maxOccurs="unbounded">
+                      <xs:complexType>
+                        <xs:sequence>
+                          <xs:element name="n" type="xs:int"/>
+                          <xs:element name="ref" type="xs:IDREF"
+                                      minOccurs="0" maxOccurs="unbounded"/>
+                        </xs:sequence>
+                        <xs:attribute name="id" type="xs:ID" use="required"/>
+                        <xs:attribute name="code" type="xs:string" use="required"/>
+                      </xs:complexType>
+                    </xs:element>
+                  </xs:sequence>
+                </xs:complexType>
+              </xs:element>
+            </xs:schema>""")
+
+        xml_source = '<root>' \
+            '<item id="a"><n>bad</n><ref>ghost1</ref></item>' \
+            '<item id="b" code="c"><n>2</n><ref>ghost2</ref><extra/></item>' \
+            '<item id="c" code="c"><n>3</n><ref>ghost3</ref><ref>ghost4</ref></item>' \
+            '</root>'
+
+        def error_key(err):
+            return type(err).__name__, err.path, err.reason
+
+        expected = [error_key(e) for e in schema.iter_errors(xml_source)]
+        self.assertEqual(len(expected), 7)
+
+        decode_errors = [error_key(e) for e in schema.decode(
+            xml_source, validation='lax')[1]]
+        self.assertEqual(decode_errors, expected)
+
+        to_dict_errors = [error_key(e) for e in xmlschema.to_dict(
+            xml_source, schema=schema, validation='lax')[1]]
+        self.assertEqual(to_dict_errors, expected)
+
+        to_json_errors = [error_key(e) for e in xmlschema.to_json(
+            xml_source, schema=schema, validation='lax')[1]]
+        self.assertEqual(to_json_errors, expected)
+
+        # The same errors also with lazy resources, for each lazy depth.
+        # The order can vary slightly with the lazy depth (e.g. an attribute
+        # error of a parent can be collected after a child error), so compare
+        # the reported errors as a set.
+        for lazy in (True, 2, 3):
+            resource_errors = [error_key(e) for e in schema.iter_errors(
+                XMLResource(xml_source, lazy=lazy))]
+            self.assertEqual(sorted(resource_errors), sorted(expected))
+
+            resource_errors = [error_key(e) for e in xmlschema.to_dict(
+                xml_source, schema=schema, validation='lax', lazy=lazy)[1]]
+            self.assertEqual(sorted(resource_errors), sorted(expected))
+
+            resource_errors = [error_key(e) for e in xmlschema.to_json(
+                xml_source, schema=schema, validation='lax', lazy=lazy)[1]]
+            self.assertEqual(sorted(resource_errors), sorted(expected))
+
+    def test_max_errors_argument(self):
+        schema = self.schema_class(self.col_xsd_file)
+        invalid_col_xml_file = self.casepath('examples/collection/collection-1_error.xml')
+
+        errors = list(schema.iter_errors(invalid_col_xml_file))
+        self.assertEqual(len(errors), 1)
+
+        errors = list(schema.iter_errors(invalid_col_xml_file, max_errors=0))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('too many validation errors', errors[0].reason)
+
+        errors = list(xmlschema.iter_errors(invalid_col_xml_file, max_errors=0))
+        self.assertEqual(len(errors), 1)
+        self.assertIn('too many validation errors', errors[0].reason)
+
     def test_max_depth_argument(self):
         schema = self.schema_class(self.col_xsd_file)
         invalid_col_xml_file = self.casepath('examples/collection/collection-1_error.xml')

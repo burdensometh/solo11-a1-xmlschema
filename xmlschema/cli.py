@@ -249,6 +249,9 @@ def validate():
     parser.add_argument('--defuse', metavar='(always, remote, never)',
                         type=defuse_data, default='remote',
                         help="when to defuse XML data, on remote resources for default.")
+    parser.add_argument('--max-errors', metavar='NUM', type=int, default=None,
+                        help="report at most NUM errors for each XML file, summarizing "
+                             "the others with a final notice (default is no limit).")
     parser.add_argument('files', metavar='[XML_FILE ...]', nargs='+',
                         help="XML files to be validated.")
 
@@ -260,7 +263,8 @@ def validate():
     for filepath in args.files:
         try:
             errors = list(iter_errors(filepath, schema=args.schema, cls=schema_class,
-                                      locations=args.locations, lazy=args.lazy, defuse=args.defuse))
+                                      locations=args.locations, lazy=args.lazy,
+                                      defuse=args.defuse, max_errors=args.max_errors))
         except (xmlschema.XMLSchemaException, URLError) as err:
             tot_errors += 1
             sys.stderr.write(f"{err}\n")

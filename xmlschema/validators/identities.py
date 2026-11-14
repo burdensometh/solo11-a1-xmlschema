@@ -405,7 +405,11 @@ class KeyrefCounter(IdentityCounter):
         if self.refer is None:
             return  # don't validate with an unbuilt keyref
 
-        refer_values = identities[self.refer].counter
+        # A referred constraint without a counter has no values: this happens
+        # when the element that declares the key/unique constraint is absent
+        # from the XML data, e.g. an optional element not provided.
+        refer_counter = identities.get(self.refer)
+        refer_values = refer_counter.counter if refer_counter is not None else {}
 
         for v in filter(lambda x: x not in refer_values, self.counter):
             if len(v) == 1 and v[0] in refer_values:

@@ -50,6 +50,143 @@ if TYPE_CHECKING:
 logger = logging.getLogger('xmlschema')
 
 
+def error_key(error: XMLSchemaValidationError) -> tuple[type, Optional[str], Optional[str]]:
+    """
+    Returns a hashable key for identifying equivalent validation errors.
+
+    Two errors are considered equivalent if they have the same class, the same
+    XPath position and the same reason. The key is used for removing duplicated
+    errors that can be generated when the same data is validated by more than
+    a validation pass (e.g. for lazy resources).
+    """
+    return type(error), error.path, error.reason
+
+
+class ErrorFilter:
+    """
+    A stateful filter for validation errors, used for producing a coherent
+    report for the different validation/decode entry points.
+
+    The filter removes duplicated errors, keeping the first occurrence, and
+    optionally limits the number of reported errors. Errors that exceed the
+    limit are only counted, so that a consistent summary can be appended to
+    the report without hiding the errors already reported.
+
+    :param max_errors: the maximum number of errors to report, `None` for no limit.
+    """
+    __slots__ = ('max_errors', 'seen', 'suppressed')
+
+    def __init__(self, max_errors: Optional[int] = None) -> None:
+        self.max_errors = max_errors
+        self.seen: set[tuple[type, Optional[str], Optional[str]]] = set()
+        self.suppressed = 0
+
+    def accept(self, error: XMLSchemaValidationError) -> bool:
+        """
+        Returns `True` if the error has to be reported, `False` if it's a
+        duplicate or it exceeds the configured limit.
+        """
+        key = error_key(error)
+        if key in self.seen:
+            return False
+
+        self.seen.add(key)
+        if self.max_errors is not None and len(self.seen) > self.max_errors:
+            self.suppressed += 1
+            return False
+
+        return True
+
+    def truncation_notice(self, validator: Any) -> Optional[XMLSchemaValidationError]:
+        """Returns a validation error that summarizes the suppressed errors, if any."""
+        if not self.suppressed:
+            return None
+
+        msg = _("too many validation errors: {} more error(s) not reported")
+        error = XMLSchemaValidationError(validator, None, msg.format(self.suppressed))
+        self.suppressed = 0
+        return error
+
+
+def filter_errors(items: Iterable[Any],
+                  max_errors: Optional[int] = None,
+                  validator: Any = None) -> Iterator[Any]:
+    """
+    Filters a stream of decoded data/validation errors, removing the duplicated
+    errors and optionally limiting the number of reported errors. Non-error
+    items are yielded unchanged.
+
+    Duplicated errors are removed keeping the first occurrence. When the limit
+    is exceeded the suppressed errors are summarized by a final notice, so the
+    most relevant errors are not buried under a crowd of secondary ones.
+
+    :param items: an iterable of decoded data and validation errors.
+    :param max_errors: the maximum number of errors to report, `None` for no limit.
+    :param validator: the validator to use for the truncation notice.
+    """
+    error_filter = ErrorFilter(max_errors)
+    for item in items:
+        if not isinstance(item, XMLSchemaValidationError):
+            yield item
+        elif error_filter.accept(item):
+            yield item
+
+    notice = error_filter.truncation_notice(validator)
+    if notice is not None:
+        yield notice
+
+
+def complete_lazy_data(obj: Any, errors: list[XMLSchemaValidationError],
+                       streams: Optional[dict[int, list[Any]]] = None) -> Any:
+    """
+    Replaces the residual iterators of a lazy decoding with their decoded
+    values, collecting the validation errors that they generate. This is
+    needed for completing the decoding of a lazy resource, that yields the
+    data of the subtrees as iterators.
+
+    A single iterator can be shared by more positions of the decoded data
+    (e.g. the items of a repeated element), so it is fully drained at the
+    first access and each occurrence takes the next decoded value.
+
+    :param obj: the decoded data.
+    :param errors: the list where the collected errors are appended.
+    :param streams: a mapping for sharing the state of the same iterator \
+    that can occur in more positions of the decoded data.
+    """
+    if streams is None:
+        streams = {}
+
+    if isinstance(obj, Iterator) and not isinstance(obj, (str, bytes, dict, list, tuple)):
+        key = id(obj)
+        if key not in streams:
+            values: list[Any] = []
+            for item in obj:
+                if isinstance(item, XMLSchemaValidationError):
+                    errors.append(item)
+                else:
+                    values.append(item)
+            streams[key] = values
+
+        values = streams[key]
+        if not values:
+            return None
+        return complete_lazy_data(values.pop(0), errors, streams)
+    elif isinstance(obj, list):
+        for k, value in enumerate(obj):
+            if isinstance(value, (Iterator, list, dict)) and \
+                    not isinstance(value, (str, bytes)):
+                obj[k] = complete_lazy_data(value, errors, streams)
+        return obj
+    elif isinstance(obj, dict):
+        for k, value in obj.items():
+            if isinstance(value, (Iterator, list, dict)) and \
+                    not isinstance(value, (str, bytes)):
+                obj[k] = complete_lazy_data(value, errors, streams)
+        return obj
+
+    return obj
+
+
 ###
 # Arguments for validation contexts
 
@@ -143,6 +280,8 @@ class ValidationContext:
                  extra_validator: Optional[ExtraValidatorType] = None,
                  validation_hook: Optional[ValidationHookType] = None,
                  use_location_hints: bool = False,
+                 id_map: Optional[Counter[str]] = None,
+                 identities: Optional[dict['XsdIdentity', 'IdentityCounter']] = None,
                  **kwargs: Any) -> None:
 
         self.source = source
@@ -163,8 +302,12 @@ class ValidationContext:
         self.validation_hook = validation_hook
         self.use_location_hints = use_location_hints
 
-        self.id_map: Counter[str] = Counter()
-        self.identities: dict['XsdIdentity', 'IdentityCounter'] = {}
+        # Identity maps can be provided for sharing the status among nested
+        # validation contexts, e.g. the contexts created for decoding the
+        # subtrees of a lazy resource.
+        self.id_map: Counter[str] = id_map if id_map is not None else Counter()
+        self.identities: dict['XsdIdentity', 'IdentityCounter'] = \
+            identities if identities is not None else {}
         self.inherited: dict[str, str] = {}
 
         # Local validation status
@@ -215,7 +358,11 @@ class ValidationContext:
 
     def raise_or_collect(self, validation: str, error: XMLSchemaValidationError) \
             -> XMLSchemaValidationError:
-        if error.elem is None and self.elem is not None:
+        # An error that has no element but already has a path is an error created
+        # on a lazy resource: the element has been released but the original
+        # position of the error has been stored, so it must not be replaced with
+        # the current context element.
+        if error.elem is None and self.elem is not None and error._path is None:
             error.elem = self.elem
 
         if self.attribute is not None and error.reason is not None \
