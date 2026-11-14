@@ -37,7 +37,8 @@ from .elements import XsdElement, Xsd11Element, XsdAlternative
 
 from .builders import XsdBuilders, GlobalMaps
 from .xsd_globals import XsdGlobals
-from .schemas import XMLSchemaMeta, XMLSchemaBase, XMLSchema, XMLSchema10, XMLSchema11
+from .schemas import XMLSchemaMeta, XMLSchemaBase, XMLSchema, XMLSchema10, XMLSchema11, \
+    get_xsd_version, create_schema
 
 
 __all__ = [
@@ -62,4 +63,5 @@ __all__ = [
     'XsdGroup', 'Xsd11Group', 'XsdElement', 'Xsd11Element', 'XsdAlternative',
     'XsdBuilders', 'GlobalMaps', 'XsdGlobals',
     'XMLSchemaMeta', 'XMLSchemaBase', 'XMLSchema', 'XMLSchema10', 'XMLSchema11',
+    'get_xsd_version', 'create_schema',
 ]

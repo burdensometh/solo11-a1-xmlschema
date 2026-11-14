@@ -1196,6 +1196,85 @@ class TestXMLSchemaMeta(unittest.TestCase):
         self.assertEqual(bases, (XMLSchemaBase,))
 
 
+class TestXsdVersionDetection(unittest.TestCase):
+
+    xsd10_schema = dedent("""\
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:element name="root" type="xs:string"/>
+        </xs:schema>""")
+
+    xsd11_assert_schema = dedent("""\
+        <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+          <xs:element name="root">
+            <xs:complexType>
+              <xs:sequence>
+                <xs:element name="value" type="xs:int"/>
+              </xs:sequence>
+              <xs:assert test="value gt 0"/>
+            </xs:complexType>
+          </xs:element>
+        </xs:schema>""")
+
+    def test_get_xsd_version(self):
+        self.assertEqual(xmlschema.get_xsd_version(self.xsd10_schema), '1.0')
+        self.assertEqual(xmlschema.get_xsd_version(self.xsd11_assert_schema), '1.1')
+
+    def test_get_xsd_version_from_xsd11_elements(self):
+        for tag in ('assert', 'assertion', 'alternative', 'override',
+                    'openContent', 'defaultOpenContent', 'explicitTimezone'):
+            source = dedent(f"""\
+                <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+                  <xs:element name="root" type="xs:string"/>
+                  <xs:{tag}/>
+                </xs:schema>""")
+            self.assertEqual(xmlschema.get_xsd_version(source), '1.1', msg=tag)
+
+    def test_get_xsd_version_from_declared_version(self):
+        # No XSD 1.1 specific elements: both validators can load the schema,
+        # so the declared version is used for the choice.
+        source = dedent("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning"
+                vc:minVersion="1.1">
+              <xs:element name="root" type="xs:string"/>
+            </xs:schema>""")
+        self.assertEqual(xmlschema.get_xsd_version(source), '1.1')
+
+        source = dedent("""\
+            <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning"
+                vc:minVersion="1.0">
+              <xs:element name="root" type="xs:string"/>
+            </xs:schema>""")
+        self.assertEqual(xmlschema.get_xsd_version(source), '1.0')
+
+    def test_get_xsd_version_from_resource(self):
+        resource = xmlschema.XMLResource(self.xsd11_assert_schema)
+        self.assertEqual(xmlschema.get_xsd_version(resource), '1.1')
+
+    def test_create_schema(self):
+        with self.assertLogs('xmlschema', level='INFO') as ctx:
+            schema = xmlschema.create_schema(self.xsd10_schema)
+        self.assertIsInstance(schema, XMLSchema10)
+        self.assertNotIsInstance(schema, XMLSchema11)
+        self.assertIn('XMLSchema10', ctx.output[0])
+
+        with self.assertLogs('xmlschema', level='INFO') as ctx:
+            schema = xmlschema.create_schema(self.xsd11_assert_schema)
+        self.assertIsInstance(schema, XMLSchema11)
+        self.assertIn('XMLSchema11', ctx.output[0])
+
+        # The created 1.1 schema validates instances using the assertion
+        self.assertTrue(schema.is_valid('<root><value>1</value></root>'))
+        self.assertFalse(schema.is_valid('<root><value>0</value></root>'))
+
+    def test_create_schema_from_resource(self):
+        resource = xmlschema.XMLResource(self.xsd11_assert_schema)
+        schema = xmlschema.create_schema(resource)
+        self.assertIsInstance(schema, XMLSchema11)
+        self.assertIs(schema.source, resource)
+
+
 if __name__ == '__main__':
     from xmlschema.testing import run_xmlschema_tests
     run_xmlschema_tests('schema classes')

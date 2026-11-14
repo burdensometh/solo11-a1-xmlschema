@@ -77,6 +77,17 @@ name_attribute = attrgetter('name')
 
 XSD_VERSION_PATTERN = re.compile(r'^\d+\.\d+$')
 
+# Tags of XSD 1.1 specific elements, used for detecting the schema version
+XSD_11_TAGS = frozenset((
+    nm.XSD_OVERRIDE,
+    nm.XSD_OPEN_CONTENT,
+    nm.XSD_DEFAULT_OPEN_CONTENT,
+    nm.XSD_ALTERNATIVE,
+    nm.XSD_ASSERT,
+    nm.XSD_ASSERTION,
+    nm.XSD_EXPLICIT_TIMEZONE,
+))
+
 # Registry for schema instances that are real meta-schema of a schema class
 _meta_registry: set['XMLSchemaBase'] = set()
 
@@ -1871,3 +1882,66 @@ class XMLSchema11(XMLSchemaBase):
 
 XMLSchema = XMLSchema10
 """The default class for schema instances."""
+
+
+def get_xsd_version(source: Union[SourceArgType, XMLResource]) -> str:
+    """
+    Detects the XSD version required for loading a schema source.
+
+    The schema document is inspected looking for XSD 1.1 specific elements
+    (eg. *xs:assert* or *xs:alternative*): if at least one is found the version
+    '1.1' is returned. Otherwise, when the schema can be loaded by both validators,
+    the declared version is used, checking the *vc:minVersion* attribute of the
+    schema root element. If no XSD 1.1 specific element and no version declaration
+    are found the version '1.0' is returned.
+
+    :param source: the schema source, that can be a URI, a file path, a file-like \
+    object, a string containing the schema, an Element, an ElementTree document or \
+    an :class:`XMLResource` instance.
+    :return: the string '1.0' or '1.1'.
+    """
+    resource = source if isinstance(source, XMLResource) else XMLResource(source)
+
+    for elem in resource.iter():
+        if elem.tag in XSD_11_TAGS:
+            return '1.1'
+
+    vc_min_version = resource.root.get(nm.VC_MIN_VERSION)
+    if vc_min_version is not None and XSD_VERSION_PATTERN.match(vc_min_version):
+        if vc_min_version > '1.0':
+            return '1.1'
+
+    return '1.0'
+
+
+def create_schema(source: Union[SourceArgType, XMLResource], **kwargs: Any) -> XMLSchemaBase:
+    """
+    Creates a schema instance from a source, detecting the XSD version to use.
+
+    The source is loaded only once, using an :class:`XMLResource` instance that is
+    then passed to the selected schema class. The detected version and the selected
+    schema class are recorded with an INFO level log message.
+
+    :param source: the schema source, that can be a URI, a file path, a file-like \
+    object, a string containing the schema, an Element, an ElementTree document or \
+    an :class:`XMLResource` instance.
+    :param kwargs: optional arguments for the initialization of the schema instance \
+    and of the schema resource.
+    :return: an instance of :class:`XMLSchema10` or :class:`XMLSchema11`.
+    """
+    if isinstance(source, XMLResource):
+        resource = source
+    else:
+        resource = XMLResource(source, **{
+            k: kwargs.pop(k)
+            for k in ('base_url', 'allow', 'defuse', 'timeout',
+                      'block', 'uri_mapper', 'opener')
+            if k in kwargs
+        })
+
+    xsd_version = get_xsd_version(resource)
+    schema_class: type[XMLSchemaBase]
+    schema_class = XMLSchema11 if xsd_version == '1.1' else XMLSchema10
+    logger.info("Detected XSD version %s for %r: create a %s instance",
+                xsd_version, resource.url or 'schema source', schema_class.__name__)
+    return schema_class(resource, **kwargs)
