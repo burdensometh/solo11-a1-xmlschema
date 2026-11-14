@@ -21,6 +21,9 @@ from .documents import validate, is_valid, iter_errors, iter_decode, \
     to_dict, to_json, to_etree, from_json, XmlDocument
 from .exports import download_schemas
 from .loaders import SchemaLoader, LocationSchemaLoader, SafeSchemaLoader
+from .versioning import SourceFingerprint, SchemaFingerprint, SchemaRegistry, \
+    fingerprint_resource, fingerprint_schemas, resource_is_stale, registry
+from .exceptions import XMLSchemaReloadError
 from .utils.etree import etree_tostring
 from .utils.urls import normalize_url, normalize_locations
 
@@ -52,6 +55,9 @@ __all__ = [
     'iter_errors', 'iter_decode', 'to_dict', 'to_json', 'to_etree', 'from_json',
     'XmlDocument', 'download_schemas', 'ElementSelector', 'ElementPathSelector',
     'SchemaLoader', 'LocationSchemaLoader', 'SafeSchemaLoader',
+    'SourceFingerprint', 'SchemaFingerprint', 'SchemaRegistry',
+    'fingerprint_resource', 'fingerprint_schemas', 'resource_is_stale',
+    'registry', 'XMLSchemaReloadError',
     'XMLSchemaValidatorError', 'XMLSchemaParseError', 'XMLSchemaNotBuiltError',
     'XMLSchemaModelError', 'XMLSchemaModelDepthError', 'XMLSchemaValidationError',
     'XMLSchemaDecodeError', 'XMLSchemaEncodeError', 'XMLSchemaChildrenValidationError',

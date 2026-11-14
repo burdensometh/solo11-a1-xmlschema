@@ -2,6 +2,19 @@
 CHANGELOG
 *********
 
+Unreleased
+==========
+* Add content-based schema fingerprints (``XMLSchema.fingerprint`` and
+  ``XMLSchema.schema_version``) for identifying the exact XSD rules in use,
+  including across process restarts
+* Add ``XMLSchema.is_stale()`` and ``XMLSchema.reload()`` for reliably picking
+  up upstream XSD changes: the new schema is fully built before the old one is
+  swapped in place, so cached references never serve stale or half-built rules
+* Add ``xmlschema.versioning.SchemaRegistry`` for sharing one canonical schema
+  instance per location, with atomic reloads and version reporting
+* Add the ``xmlschema-schema-info`` console script for checking a schema's
+  version fingerprint and stale state
+
 `v4.3.2`_ (2026-06-30)
 ======================
 * Fix for issues #473, #474 and #475

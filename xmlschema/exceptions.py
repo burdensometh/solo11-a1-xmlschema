@@ -38,6 +38,10 @@ class XMLSchemaRuntimeError(XMLSchemaException, RuntimeError):
     pass
 
 
+class XMLSchemaReloadError(XMLSchemaRuntimeError):
+    """Raised when a schema can't be reloaded from its source."""
+
+
 class XMLSchemaNamespaceError(XMLSchemaException, RuntimeError):
     """Raised when a wrong runtime condition is found with a namespace."""
 

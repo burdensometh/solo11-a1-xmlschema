@@ -18,9 +18,10 @@ import pathlib
 import os
 import platform
 import sys
+import tempfile
 
 import xmlschema
-from xmlschema.cli import get_loglevel, get_converter, validate, xml2json, json2xml
+from xmlschema.cli import get_loglevel, get_converter, validate, xml2json, json2xml, schema_info
 from xmlschema.testing import run_xmlschema_tests
 
 WORK_DIRECTORY = os.getcwd()
@@ -43,6 +44,11 @@ class TestConsoleScripts(unittest.TestCase):
         with patch.object(sys, 'argv', ['xmlschema-json2xml'] + list(args)):
             with self.assertRaises(SystemExit) as self.ctx:
                 json2xml()
+
+    def run_schema_info(self, *args):
+        with patch.object(sys, 'argv', ['xmlschema-schema-info'] + list(args)):
+            with self.assertRaises(SystemExit) as self.ctx:
+                schema_info()
 
     def setUp(self):
         vehicles_dir = pathlib.Path(__file__).parent.joinpath('test_cases/examples/vehicles/')
@@ -247,6 +253,46 @@ class TestConsoleScripts(unittest.TestCase):
         self.assertEqual(mock_out.getvalue(), '')
         self.assertIn("'sometimes' is not a valid value", mock_err.getvalue())
         self.assertEqual('2', str(self.ctx.exception))
+
+    @patch('sys.stderr', new_callable=io.StringIO)
+    @patch('sys.stdout', new_callable=io.StringIO)
+    def test_schema_info_command_01(self, mock_out, mock_err):
+        self.run_schema_info('vehicles.xsd')
+        self.assertEqual(mock_err.getvalue(), '')
+        output = mock_out.getvalue()
+        self.assertIn('vehicles.xsd version=', output)
+        self.assertIn('stale=no', output)
+        self.assertEqual('0', str(self.ctx.exception))
+
+    @patch('sys.stderr', new_callable=io.StringIO)
+    @patch('sys.stdout', new_callable=io.StringIO)
+    def test_schema_info_command_02_verbose_reload_and_missing(self, mock_out, mock_err):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xsd_path = pathlib.Path(tmpdir) / 'schema.xsd'
+            xsd_path.write_text(
+                '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+                '<xs:element name="root"/></xs:schema>'
+            )
+
+            # Verbose output lists each composing source
+            self.run_schema_info('-v', str(xsd_path))
+            self.assertEqual(mock_err.getvalue(), '')
+            output = mock_out.getvalue()
+            self.assertIn('version=', output)
+            self.assertIn('stale=no', output)
+            self.assertIn(str(xsd_path), output)
+            self.assertEqual('0', str(self.ctx.exception))
+
+            # A reload on an unchanged schema is a no-op but still succeeds
+            self.run_schema_info('--reload', str(xsd_path))
+            self.assertIn('stale=no', mock_out.getvalue())
+            self.assertEqual('0', str(self.ctx.exception))
+
+            # A missing file is reported on stderr with a non-zero exit code
+            missing = pathlib.Path(tmpdir) / 'missing.xsd'
+            self.run_schema_info(str(missing))
+            self.assertNotEqual('0', str(self.ctx.exception))
+            self.assertIn(str(missing), mock_err.getvalue())
 
     def test_get_loglevel(self):
         self.assertEqual(get_loglevel(0), logging.ERROR)

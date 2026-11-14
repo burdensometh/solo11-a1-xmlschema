@@ -76,7 +76,12 @@ class XsdValidator:
                 yield k
 
     def __getstate__(self) -> dict[str, Any]:
-        state = {attr: getattr(self, attr) for attr in self._mro_slots()}
+        state = {}
+        for attr in self._mro_slots():
+            try:
+                state[attr] = getattr(self, attr)
+            except AttributeError:
+                continue  # Optional slots that were never set
         state.update(self.__dict__)
         for k in self._cached_properties():
             state.pop(k, None)

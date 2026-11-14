@@ -61,6 +61,7 @@ docs = [
 xmlschema-json2xml = "xmlschema.cli:json2xml"
 xmlschema-validate = "xmlschema.cli:validate"
 xmlschema-xml2json = "xmlschema.cli:xml2json"
+xmlschema-schema-info = "xmlschema.cli:schema_info"
 
 [project.urls]
 Homepage = "https://github.com/sissaschool/xmlschema"

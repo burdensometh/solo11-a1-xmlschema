@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 from functools import cached_property
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, cast, Optional, Union
+from typing import Any, cast, Optional, Union, TYPE_CHECKING
 from urllib.request import OpenerDirector
 from xml.etree import ElementTree
 from xml.etree.ElementTree import Element
@@ -37,7 +37,7 @@ from xmlschema.aliases import XMLSourceType, NsmapType, LocationsType, UriMapper
     StagedItemType, IterParseType
 from xmlschema.exceptions import XMLSchemaTypeError, XMLSchemaKeyError, \
     XMLSchemaRuntimeError, XMLSchemaValueError, XMLSchemaNamespaceError, \
-    XMLSchemaAttributeError
+    XMLSchemaAttributeError, XMLSchemaReloadError
 from xmlschema.translation import gettext as _
 from xmlschema.utils.decoding import Empty
 from xmlschema.utils.etree import prune_etree, is_etree_element, \
@@ -72,6 +72,9 @@ from .builders import XsdBuilders
 from .xsd_globals import XsdGlobals
 
 logger = logging.getLogger('xmlschema')
+
+if TYPE_CHECKING:
+    from xmlschema.versioning import SchemaFingerprint  # noqa: F401
 
 name_attribute = attrgetter('name')
 
@@ -252,7 +255,8 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
     default_open_content: Optional[XsdDefaultOpenContent] = None
     override: Optional[SchemaType] = None
 
-    __slots__ = ('validation', 'errors', 'maps', 'target_namespace', 'source', 'namespaces')
+    __slots__ = ('validation', 'errors', 'maps', 'target_namespace',
+                 'source', 'namespaces', '_fingerprint')
 
     @classmethod
     def from_settings(cls, settings: SchemaSettings,
@@ -496,7 +500,10 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
             for k, v in self.__dict__.items()
         )
         for attr in self._mro_slots():
-            value = getattr(self, attr)
+            try:
+                value = getattr(self, attr)
+            except AttributeError:
+                continue  # Optional slots, e.g. the lazily computed '_fingerprint'
             if isinstance(value, (list, dict)):
                 object.__setattr__(schema, attr, value.copy())
             else:
@@ -839,10 +846,149 @@ class XMLSchemaBase(XsdValidator, ElementPathMixin[Union[SchemaType, XsdElement]
         """ Clears the schema caches unloading components and schema node tree."""
         for attr in self._cached_properties():
             self.__dict__.pop(attr, None)
+        # The fingerprint records the state of the sources, not a derived cache:
+        # keep it until an explicit reload replaces the sources.
 
     def build(self) -> None:
         """Builds the schema's XSD global maps."""
         self.maps.build()
+
+    @property
+    def fingerprint(self) -> 'SchemaFingerprint':
+        """
+        The fingerprint of all the XSD sources (main schema, includes and imports)
+        the schema has been built from. It changes exactly when one of those
+        sources changes, so it can be used to tell which rules are in use even
+        across process restarts.
+
+        The value is computed once and cached; :meth:`reload` and
+        :meth:`reload_from` invalidate the cache.
+        """
+        try:
+            return self._fingerprint
+        except AttributeError:
+            from xmlschema.versioning import fingerprint_schemas
+            self._fingerprint = fingerprint_schemas(self)
+            return self._fingerprint
+
+    @property
+    def schema_version(self) -> str:
+        """
+        A short content-based version identifier of the schema rules. Two schema
+        instances built from the same set of XSD sources share the same value.
+        """
+        return self.fingerprint.short
+
+    def is_stale(self, check_content: bool = False) -> bool:
+        """
+        Returns ``True`` if any XSD source of this schema (main document,
+        includes or imports) changed since the schema was built.
+
+        :param check_content: for default a local file change is detected with a
+            cheap ``stat()`` check (size and modification time). Set this to
+            ``True`` to always re-read and hash the content, which is required for
+            remote resources and for file systems with coarse modification times.
+        :raises xmlschema.XMLResourceOSError: if a resource URL is not accessible.
+        """
+        from xmlschema.versioning import resource_is_stale, _is_library_schema
+
+        recorded = {f.url: f for f in self.fingerprint.sources}
+        for other in self.maps.iter_schemas():
+            if _is_library_schema(other):
+                continue
+            source_fingerprint = recorded.get(other.source.url)
+            if source_fingerprint is None:
+                return True
+            if resource_is_stale(other.source, source_fingerprint, check_content):
+                return True
+        return False
+
+    def reload(self, check_content: bool = False, force: bool = False) -> bool:
+        """
+        Reloads the schema from its source URL when the XSD sources changed.
+
+        The reload is atomic: a brand new schema is fully built first and only
+        then the current instance is updated in place with the new rules, so
+        references already held by application code keep working and never point
+        at a half-built schema. If building the new schema fails the previous
+        rules are kept and an :exc:`XMLSchemaReloadError` is raised.
+
+        :param check_content: re-read and hash every resource instead of relying
+            on local file modification times.
+        :param force: reload even if no change is detected.
+        :returns: ``True`` if the schema was reloaded, ``False`` if it was already
+            up to date.
+        :raises XMLSchemaReloadError: if the schema has no source URL (it was
+            built from in-memory data) or if the new schema can't be built.
+        """
+        if self.source.url is None:
+            raise XMLSchemaReloadError(
+                "can't reload a schema built from an in-memory source: "
+                "rebuild it from the updated data instead"
+            )
+        if not force and not self.is_stale(check_content):
+            return False
+
+        try:
+            new_schema = type(self)(self.source.url)
+            new_schema.build()
+        except XMLSchemaReloadError:
+            raise
+        except Exception as err:
+            raise XMLSchemaReloadError(
+                f"reload of schema {self.source.url!r} failed, "
+                f"keeping the previous version: {err}"
+            ) from err
+        else:
+            self.reload_from(new_schema)
+            return True
+
+    def reload_from(self, other: SchemaType) -> None:
+        """
+        Replaces in place the rules of this schema instance with the content of
+        another, freshly built schema. Used by :meth:`reload` and by
+        :class:`~xmlschema.versioning.SchemaRegistry` so that references cached by
+        application code atomically start using the new rules.
+
+        The schema keeps its object identity but adopts the freshly built schema's
+        sources and global maps. Components that the new maps attribute to the
+        main schema are rewired to this instance; predefined meta-schema
+        components are left untouched (they belong to shared class-level maps).
+        The previous global maps are simply abandoned, so no shared state is
+        mutated.
+        """
+        if not isinstance(other, type(self)):
+            raise XMLSchemaTypeError(
+                f"can't reload {type(self)!r} from {type(other)!r}"
+            )
+        elif self.is_meta():
+            raise XMLSchemaReloadError("a class meta-schema can't be reloaded")
+
+        from xmlschema.versioning import fingerprint_schemas
+        fingerprint = fingerprint_schemas(other)
+
+        # Replace slot/dict attributes with those of the freshly built schema.
+        for attr in self._mro_slots():
+            if attr == '_fingerprint':
+                continue
+            object.__setattr__(self, attr, getattr(other, attr))
+        self.__dict__.clear()
+        self.__dict__.update(other.__dict__)
+
+        # Drop cached properties copied from the other instance: they reference
+        # components of the other object and must be recomputed on demand.
+        for attr in self._cached_properties():
+            self.__dict__.pop(attr, None)
+
+        object.__setattr__(self, '_fingerprint', fingerprint)
+
+        # Re-attribute every component (globals and nested components alike) that
+        # the freshly built schema owned, so that component.schema keeps pointing
+        # at this instance after the swap. Components of included/imported
+        # schemas and predefined meta-schema components are left untouched.
+        for component in self.maps.iter_components():
+            if component.schema is other:
+                object.__setattr__(component, 'schema', self)
 
     @property
     def built(self) -> bool:

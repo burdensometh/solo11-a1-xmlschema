@@ -18,7 +18,7 @@ from urllib.error import URLError
 
 import xmlschema
 from xmlschema import XMLSchema, XMLSchema11, iter_errors, to_json, from_json, etree_tostring
-from xmlschema.exceptions import XMLSchemaValueError
+from xmlschema.exceptions import XMLSchemaValueError, XMLSchemaReloadError
 
 
 PROGRAM_NAME = os.path.basename(sys.argv[0])
@@ -274,5 +274,52 @@ def validate():
                 if args.verbosity > 0:
                     for error in errors:
                         sys.stderr.write(f"{error}\n")
+
+    sys.exit(tot_errors)
+
+
+def schema_info():
+    """Prints the content-based version and the stale state of one or more XSD files."""
+    parser = argparse.ArgumentParser(
+        prog=PROGRAM_NAME, add_help=True,
+        description="show the version fingerprint and stale state of XSD schemas."
+    )
+    parser.add_argument('files', metavar='[XSD_FILE ...]', nargs='+',
+                        help="XSD schema files to inspect.")
+    parser.add_argument('--version', type=xsd_version_number, default='1.0',
+                        help="XSD schema validator to use (default is 1.0).")
+    parser.add_argument('--check-content', action='store_true', default=False,
+                        help="re-read and hash every resource instead of relying "
+                             "on file modification times.")
+    parser.add_argument('--reload', action='store_true', default=False,
+                        help="reload stale schemas before printing their state.")
+    parser.add_argument('-v', dest='verbosity', action='count', default=0,
+                        help="also print the fingerprint of each composing XSD source.")
+
+    args = parser.parse_args()
+    schema_class = XMLSchema if args.version == '1.0' else XMLSchema11
+
+    tot_errors = 0
+    for filepath in args.files:
+        try:
+            schema = schema_class(filepath)
+            if args.reload:
+                try:
+                    schema.reload(check_content=args.check_content)
+                except XMLSchemaReloadError as err:
+                    tot_errors += 1
+                    sys.stderr.write(f"{filepath}: {err}\n")
+                    continue
+            stale = schema.is_stale(check_content=args.check_content)
+            sys.stdout.write(
+                f"{filepath} version={schema.schema_version} "
+                f"stale={'yes' if stale else 'no'}\n"
+            )
+            if args.verbosity > 0:
+                for source in schema.fingerprint.sources:
+                    sys.stdout.write(f"  {source.short} {source.url}\n")
+        except (xmlschema.XMLSchemaException, URLError, OSError) as err:
+            tot_errors += 1
+            sys.stderr.write(f"{filepath}: {err}\n")
 
     sys.exit(tot_errors)
